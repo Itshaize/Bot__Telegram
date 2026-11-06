@@ -1,40 +1,24 @@
-# Cliente Pyro4 - Mauricio Jacome
 import Pyro4
-from getpass import getpass
 
-from errores import (
-    CredencialesInvalidas, CodigoIncorrecto, CodigoExpirado,
-    CuentaBloqueada, EnvioTelegramFallido, configurar_excepciones_pyro
+servidor = Pyro4.Proxy(
+    "PYRONAME:practica.autenticacion@localhost:9090"
 )
 
+print("SISTEMA DE AUTENTICACION")
 
-def main():
-    configurar_excepciones_pyro()
+usuario = input("Usuario: ")
+password = input("Contraseña: ")
 
-    try:
-        ns = Pyro4.locateNS(host="localhost", port=9090)
-        uri = ns.lookup("practica.autenticacion")
+respuesta = servidor.iniciar_sesion(usuario, password)
 
-        with Pyro4.Proxy(uri) as servidor:
-            print("SISTEMA DE AUTENTICACION MFA")
-            usuario = input("Usuario: ").strip()
-            password = getpass("Contrasena: ")
+print(respuesta)
 
-            print(servidor.iniciar_sesion(usuario, password))
+if respuesta == "Codigo enviado a Telegram":
 
-            codigo = input("Codigo recibido en Telegram: ").strip()
-            print(servidor.verificar_codigo_mfa(usuario, codigo))
+    codigo = input("Codigo de Telegram: ")
 
-    except (
-        CredencialesInvalidas, CodigoIncorrecto, CodigoExpirado,
-        CuentaBloqueada, EnvioTelegramFallido
-    ) as error:
-        print("Error:", error)
-    except Pyro4.errors.PyroError:
-        print("No se pudo conectar o comunicar con el servidor Pyro4.")
-    except (KeyboardInterrupt, EOFError):
-        print("\nOperacion cancelada.")
+    resultado = servidor.verificar_codigo_mfa(
+        usuario, codigo
+    )
 
-
-if __name__ == "__main__":
-    main()
+    print(resultado)
