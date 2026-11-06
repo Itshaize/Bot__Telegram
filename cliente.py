@@ -5,20 +5,35 @@ servidor = Pyro4.Proxy(
 )
 
 print("SISTEMA DE AUTENTICACION")
+print("1. Crear usuario")
+print("2. Iniciar sesion")
 
-usuario = input("Usuario: ")
-password = input("Contraseña: ")
+opcion = input("Elige una opcion: ")
 
-respuesta = servidor.iniciar_sesion(usuario, password)
+if opcion == "1":
 
-print(respuesta)
+    usuario = input("Nuevo usuario: ")
+    password = input("Nueva contraseña: ")
 
-if respuesta == "Codigo enviado a Telegram":
+    print(servidor.registrar_usuario(usuario, password))
 
-    codigo = input("Codigo de Telegram: ")
+elif opcion == "2":
 
-    resultado = servidor.verificar_codigo_mfa(
-        usuario, codigo
-    )
+    usuario = input("Usuario: ")
+    password = input("Contraseña: ")
 
-    print(resultado)
+    respuesta = servidor.iniciar_sesion(usuario, password)
+    print(respuesta)
+
+    if respuesta == "Codigo enviado a Telegram":
+
+        codigo = input("Codigo de Telegram: ")
+
+        resultado = servidor.verificar_codigo_mfa(
+            usuario, codigo
+        )
+
+        print(resultado)
+
+else:
+    print("Opcion incorrecta")
