@@ -23,13 +23,31 @@ def crear_tablas():
         )
     """)
 
+    db.commit()
+    db.close()
+
+
+def crear_usuario(usuario, password):
+    db = conectar()
+
+    existe = db.execute(
+        "SELECT * FROM usuarios WHERE usuario=?",
+        (usuario,)
+    ).fetchone()
+
+    if existe:
+        db.close()
+        return "El usuario ya existe"
+
     db.execute(
-        "INSERT OR IGNORE INTO usuarios VALUES (?, ?)",
-        ("ismael", "1234")
+        "INSERT INTO usuarios VALUES (?, ?)",
+        (usuario, password)
     )
 
     db.commit()
     db.close()
+
+    return "Usuario creado correctamente"
 
 
 def validar_usuario(usuario, password):
