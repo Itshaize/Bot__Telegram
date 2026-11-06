@@ -7,18 +7,21 @@ import time
 import requests
 
 
-# El token se configura en Ubuntu con:
-# export TELEGRAM_BOT_TOKEN="TOKEN_DEL_BOT"
+# Configurar en la terminal: export TELEGRAM_BOT_TOKEN="TOKEN_DEL_BOT"
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
-# Por ahora se prueba solo con el chat de Ismael.
+# El chat de Ismael ya estaba registrado. Los demas son opcionales.
+# Cada persona debe iniciar el bot en Telegram antes de recibir mensajes.
 CHATS = {
-    "ismael": "1248963335",
+    "ismael": os.getenv("TELEGRAM_CHAT_ID_ISMAEL", "1248963335"),
+    "admin": os.getenv("TELEGRAM_CHAT_ID_ADMIN", ""),
+    "usuario1": os.getenv("TELEGRAM_CHAT_ID_USUARIO1", ""),
+    "usuario2": os.getenv("TELEGRAM_CHAT_ID_USUARIO2", ""),
 }
 
 
 def enviar_codigo(usuario, codigo):
-    """Envia un codigo de verificacion al chat de Telegram registrado."""
+    """Envia un codigo al chat de Telegram registrado."""
     chat_id = CHATS.get(usuario)
 
     if not TOKEN or not chat_id:
@@ -47,8 +50,9 @@ def enviar_codigo(usuario, codigo):
             return True
 
         print("Telegram no confirmo el envio")
-    except (requests.RequestException, ValueError) as error:
-        print("Error al enviar mensaje:", error)
+    except (requests.RequestException, ValueError):
+        # No imprimir la URL del error: contiene el token del bot.
+        print("Error al comunicarse con Telegram")
 
     return False
 
@@ -82,9 +86,7 @@ class Seguridad:
         print("Intentos fallidos de", usuario, ":", self.intentos[usuario])
 
         if self.intentos[usuario] >= self.max_intentos:
-            self.bloqueados[usuario] = (
-                time.monotonic() + self.tiempo_bloqueo
-            )
+            self.bloqueados[usuario] = time.monotonic() + self.tiempo_bloqueo
             print("Usuario bloqueado por 60 segundos:", usuario)
             return True
 
