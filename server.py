@@ -3,7 +3,7 @@ import random
 import time
 import sqlite3
 
-from base_datos import crear_tablas, validar_usuario, guardar_codigo
+from base_datos import crear_tablas, crear_usuario, validar_usuario, guardar_codigo
 from telegram_bot import enviar_codigo
 
 
@@ -13,6 +13,9 @@ class Servidor:
     def __init__(self):
         crear_tablas()
         self.bloqueados = {}
+
+    def registrar_usuario(self, usuario, password):
+        return crear_usuario(usuario, password)
 
     def iniciar_sesion(self, usuario, password):
 
