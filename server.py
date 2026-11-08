@@ -1,103 +1,98 @@
-"""Servidor central Pyro4: contraseña, OTP, expiración y bloqueo temporal."""
-
+"""Servidor Pyro4 para clientes de la red local o una VPN privada."""
 import os
-import Pyro4
-import secrets
+import random
+import sqlite3
+import threading
 import time
-import hmac
-from threading import Lock
 
-from telegram_bot import enviar_codigo, Seguridad
-from errores import (
-    CredencialesInvalidas, CodigoIncorrecto, CodigoExpirado,
-    CuentaBloqueada, EnvioTelegramFallido, configurar_excepciones_pyro
-)
+import Pyro4
+
+from base_datos import crear_tablas, crear_usuario, validar_usuario, guardar_codigo, conectar
+from telegram_bot import enviar_codigo
+
+# Se usa un puerto fijo y un identificador conocido, sin Name Server.
+HOST = os.getenv("SERVER_BIND_HOST", "0.0.0.0")
+PORT = int(os.getenv("SERVER_PORT", "50000"))
+OBJECT_ID = "autenticacion"
 
 
 @Pyro4.expose
-@Pyro4.behavior(instance_mode="single")
-class ServidorAutenticacion:
-
+class Servidor:
     def __init__(self):
-        # Usuarios de demostración (no usar contraseñas fijas en producción).
-        self.usuarios = {
-            "admin": "1234",
-            "usuario1": "abcd",
-            "usuario2": "5678",
-            "ismael": "1234",  # Usuario con Telegram configurado en telegram_bot.py
-        }
-        self.codigos = {}
-        self.seguridad = Seguridad()
-        self.lock = Lock()
+        crear_tablas()
+        self.bloqueados = {}
+        self.lock = threading.RLock()
+
+    def registrar_usuario(self, usuario, password):
+        return crear_usuario(usuario, password)
 
     def iniciar_sesion(self, usuario, password):
         with self.lock:
-            if self.seguridad.esta_bloqueado(usuario):
-                raise CuentaBloqueada("Cuenta bloqueada por 60 segundos")
+            if self.bloqueados.get(usuario, 0) > time.time():
+                return "Usuario bloqueado"
 
-            if self.usuarios.get(usuario) != password:
-                if self.seguridad.registrar_error(usuario):
-                    self.codigos.pop(usuario, None)
-                    raise CuentaBloqueada("Demasiados intentos. Espera 60 segundos")
-                raise CredencialesInvalidas("Usuario o contraseña incorrectos")
+            if not validar_usuario(usuario, password):
+                return "Usuario o contraseña incorrectos"
 
-            # Codigo aleatorio de 6 digitos que caduca en 3 minutos.
-            codigo = f"{secrets.randbelow(1000000):06d}"
-            self.codigos[usuario] = {
-                "codigo": codigo,
-                "expiracion": time.monotonic() + 180,
-            }
+            codigo = f"{random.SystemRandom().randint(0, 999999):06d}"
+            expira = time.time() + 180
+            # Registrar antes de enviar evita inconsistencias entre clientes.
+            guardar_codigo(usuario, codigo, expira)
 
-        # Se envía fuera del bloqueo para no detener otras solicitudes.
-        if not enviar_codigo(usuario, codigo):
-            with self.lock:
-                # Eliminar solo el mismo codigo, por si se inicio otra sesion.
-                datos = self.codigos.get(usuario)
-                if datos and datos["codigo"] == codigo:
-                    self.codigos.pop(usuario, None)
-            raise EnvioTelegramFallido("No se pudo enviar el codigo por Telegram")
+            if not enviar_codigo(usuario, codigo):
+                with conectar() as db:
+                    db.execute("DELETE FROM codigos WHERE usuario=?", (usuario,))
+                return "No se pudo enviar el codigo"
 
-        return "Credenciales correctas. Codigo enviado a Telegram (3 minutos)"
+            return "Codigo enviado a Telegram"
 
     def verificar_codigo_mfa(self, usuario, codigo):
         with self.lock:
-            if self.seguridad.esta_bloqueado(usuario):
-                raise CuentaBloqueada("Cuenta bloqueada por 60 segundos")
+            if self.bloqueados.get(usuario, 0) > time.time():
+                return "Usuario bloqueado"
 
-            datos = self.codigos.get(usuario)
-            if datos is None:
-                raise CodigoExpirado("No hay un codigo activo. Inicia sesion de nuevo")
+            with conectar() as db:
+                dato = db.execute(
+                    "SELECT codigo, expira, intentos FROM codigos WHERE usuario=?",
+                    (usuario,),
+                ).fetchone()
 
-            if time.monotonic() >= datos["expiracion"]:
-                del self.codigos[usuario]
-                raise CodigoExpirado("El codigo ha expirado")
+                if dato is None:
+                    return "No existe un codigo"
 
-            if not hmac.compare_digest(str(codigo), datos["codigo"]):
-                if self.seguridad.registrar_error(usuario):
-                    del self.codigos[usuario]
-                    raise CuentaBloqueada("Demasiados intentos. Espera 60 segundos")
-                raise CodigoIncorrecto("El codigo es incorrecto")
+                codigo_guardado, expira, intentos = dato
+                if time.time() > expira:
+                    db.execute("DELETE FROM codigos WHERE usuario=?", (usuario,))
+                    return "Codigo expirado"
 
-            # Una vez usado, el codigo deja de ser valido.
-            del self.codigos[usuario]
-            self.seguridad.reiniciar_intentos(usuario)
-            return "Autenticacion exitosa"
+                if not isinstance(codigo, str) or not __import__("hmac").compare_digest(codigo, codigo_guardado):
+                    intentos += 1
+                    if intentos >= 3:
+                        self.bloqueados[usuario] = time.time() + 60
+                        db.execute("DELETE FROM codigos WHERE usuario=?", (usuario,))
+                        return "Bloqueado por 60 segundos"
 
-    # Mantiene compatibilidad con clientes anteriores de los compañeros.
-    def verificar_codigo(self, usuario, codigo):
-        return self.verificar_codigo_mfa(usuario, codigo)
+                    db.execute(
+                        "UPDATE codigos SET intentos=? WHERE usuario=?",
+                        (intentos, usuario),
+                    )
+                    return "Codigo incorrecto"
+
+                db.execute("DELETE FROM codigos WHERE usuario=?", (usuario,))
+                return "ACCESO AUTORIZADO"
+
+
+def main():
+    if not 1 <= PORT <= 65535:
+        raise ValueError("SERVER_PORT debe estar entre 1 y 65535")
+    servidor = Servidor()
+    with Pyro4.Daemon(host=HOST, port=PORT) as daemon:
+        daemon.register(servidor, objectId=OBJECT_ID)
+        print(f"Servidor activo en {HOST}:{PORT}")
+        print(f"Clientes: PYRO:{OBJECT_ID}@IP_DEL_SERVIDOR:{PORT}")
+        print("Permite el puerto TCP solo en tu red local o VPN.")
+        daemon.requestLoop()
 
 
 if __name__ == "__main__":
-    configurar_excepciones_pyro()
-    host = os.getenv("PYRO_HOST", "localhost")
-    host_ns = os.getenv("PYRO_NS_HOST", "localhost")
-    daemon = Pyro4.Daemon(host=host)
-    ns = Pyro4.locateNS(host=host_ns, port=9090)
-    uri = daemon.register(ServidorAutenticacion())
-    ns.register("practica.autenticacion", uri)
-
-    print("Servidor iniciado")
-    print("URI:", uri)
-    print("Registrado como practica.autenticacion")
-    daemon.requestLoop()
+    main()

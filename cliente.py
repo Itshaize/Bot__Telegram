@@ -1,68 +1,57 @@
-"""Cliente Pyro4 de autenticacion con codigo enviado a Telegram.
-Integrante: Mauricio Jácome
-"""
-
+"""Cliente de autenticacion: se conecta por IP al servidor Pyro4."""
+import getpass
 import os
+
 import Pyro4
-from getpass import getpass
-
-from errores import (
-    CredencialesInvalidas, CodigoIncorrecto, CodigoExpirado,
-    CuentaBloqueada, EnvioTelegramFallido, configurar_excepciones_pyro
-)
+from Pyro4.errors import CommunicationError, TimeoutError as PyroTimeoutError
 
 
-def ejecutar(servidor):
-    usuario = input("Usuario: ").strip()
-    password = getpass("Contraseña: ")
-
-    try:
-        respuesta = servidor.iniciar_sesion(usuario, password)
-        print(respuesta)
-    except CredencialesInvalidas:
-        print("Usuario o contraseña incorrectos.")
-        return False
-    except CuentaBloqueada:
-        print("Cuenta bloqueada. Intenta nuevamente en 60 segundos.")
-        return False
-    except EnvioTelegramFallido:
-        print("No se pudo enviar el codigo. Revisa el bot de Telegram.")
-        return False
-
-    codigo = input("Codigo MFA de 6 digitos: ").strip()
-
-    try:
-        resultado = servidor.verificar_codigo_mfa(usuario, codigo)
-        if resultado == "Autenticacion exitosa":
-            print("Acceso autorizado.")
-            return True
-        print("No se pudo completar la verificacion.")
-        return False
-    except CodigoIncorrecto:
-        print("Codigo incorrecto.")
-    except CodigoExpirado:
-        print("Codigo expirado o no disponible. Vuelve a iniciar sesion.")
-    except CuentaBloqueada:
-        print("Demasiados intentos. Cuenta bloqueada por 60 segundos.")
-
-    return False
+def solicitar_servidor():
+    ip = os.getenv("SERVER_IP") or input("IP del servidor: ").strip()
+    if not ip:
+        raise ValueError("Debes indicar la IP del servidor")
+    puerto = int(os.getenv("SERVER_PORT", "50000"))
+    if not 1 <= puerto <= 65535:
+        raise ValueError("Puerto no valido")
+    return Pyro4.Proxy(f"PYRO:autenticacion@{ip}:{puerto}")
 
 
 def main():
-    configurar_excepciones_pyro()
     try:
-        host = os.getenv("PYRO_NS_HOST", "localhost")
-        ns = Pyro4.locateNS(host=host, port=9090)
-        uri = ns.lookup("practica.autenticacion")
-        with Pyro4.Proxy(uri) as servidor:
-            servidor._pyroTimeout = 15
-            ejecutar(servidor)
-    except (Pyro4.errors.CommunicationError, Pyro4.errors.NamingError):
-        print("No se pudo conectar al servidor Pyro4. Revisa que este encendido.")
-    except Pyro4.errors.PyroError:
-        print("Ocurrio un error remoto en el servidor.")
-    except (KeyboardInterrupt, EOFError):
-        print("\nOperacion cancelada.")
+        with solicitar_servidor() as servidor:
+            servidor._pyroTimeout = 12
+            while True:
+                print("\nSISTEMA DE AUTENTICACION")
+                print("1. Crear usuario")
+                print("2. Iniciar sesion")
+                print("3. Salir")
+                opcion = input("Elige una opcion: ").strip()
+
+                if opcion == "3":
+                    break
+                if opcion not in ("1", "2"):
+                    print("Opcion incorrecta")
+                    continue
+
+                usuario = input("Usuario: ").strip()
+                password = getpass.getpass("Contraseña: ")
+
+                if opcion == "1":
+                    print(servidor.registrar_usuario(usuario, password))
+                    continue
+
+                respuesta = servidor.iniciar_sesion(usuario, password)
+                print(respuesta)
+                if respuesta == "Codigo enviado a Telegram":
+                    codigo = input("Codigo de Telegram: ").strip()
+                    print(servidor.verificar_codigo_mfa(usuario, codigo))
+    except (CommunicationError, PyroTimeoutError, OSError) as error:
+        print("No se pudo conectar con el servidor. Comprueba la IP, el puerto,")
+        print("la red y el firewall. Detalle:", error)
+    except ValueError as error:
+        print("Configuracion incorrecta:", error)
+    except KeyboardInterrupt:
+        print("\nCliente finalizado.")
 
 
 if __name__ == "__main__":
